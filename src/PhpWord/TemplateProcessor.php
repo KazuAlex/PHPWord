@@ -605,17 +605,24 @@ class TemplateProcessor
             throw new Exception('Can not clone row, template variable not found or variable contains markup.');
         }
 
-        $rowStart = $this->findRowStart($tagPos);
-        $rowEnd = $this->findRowEnd($tagPos);
-        $xmlRow = $this->getSlice($rowStart, $rowEnd);
+        $tblStart = $this->findTableStart($this->tempDocumentMainPart, $tagPos);
+        $tblEnd = $this->findTableEnd($this->tempDocumentMainPart, $tblStart);
+
+        $xmlTable = $this->getSlice($this->tempDocumentMainPart, $tblStart, $tblEnd + 1);
+        $tagPos = strpos($xmlTable, $search);
+
+        $rowStart = $this->findRowStart($xmlTable, $tagPos);
+        $rowEnd = $this->findRowEnd($xmlTable, $tagPos);
+        $xmlRow = $this->getSlice($xmlTable, $rowStart, $rowEnd);
 
         // Check if there's a cell spanning multiple rows.
-        if (preg_match('#<w:vMerge w:val="restart"/>#', $xmlRow)) {
+        if ((!$mergeCells || !is_array($mergeCells)) ||
+            && preg_match('#<w:vMerge w:val="restart"/>#', $xmlRow)) {
             // $extraRowStart = $rowEnd;
             $extraRowEnd = $rowEnd;
             while (true) {
-                $extraRowStart = $this->findRowStart($extraRowEnd + 1);
-                $extraRowEnd = $this->findRowEnd($extraRowEnd + 1);
+                $extraRowStart = $this->findRowStart($xmlTable, $extraRowEnd + 1);
+                $extraRowEnd = $this->findRowEnd($xmlTable, $extraRowEnd + 1);
 
                 // If extraRowEnd is lower then 7, there was no next row found.
                 if ($extraRowEnd < 7) {
@@ -623,7 +630,7 @@ class TemplateProcessor
                 }
 
                 // If tmpXmlRow doesn't contain continue, this row is no longer part of the spanned row.
-                $tmpXmlRow = $this->getSlice($extraRowStart, $extraRowEnd);
+                $tmpXmlRow = $this->getSlice($xmlTable, $extraRowStart, $extraRowEnd);
                 if (!preg_match('#<w:vMerge/>#', $tmpXmlRow) &&
                     !preg_match('#<w:vMerge w:val="continue"\s*/>#', $tmpXmlRow)) {
                     break;
@@ -631,12 +638,53 @@ class TemplateProcessor
                 // This row was a spanned row, update $rowEnd and search for the next row.
                 $rowEnd = $extraRowEnd;
             }
-            $xmlRow = $this->getSlice($rowStart, $rowEnd);
+            $xmlRow = $this->getSlice($xmlTable, $rowStart, $rowEnd);
         }
 
-        $result = $this->getSlice(0, $rowStart);
-        $result .= implode($this->indexClonedVariables($numberOfClones, $xmlRow));
-        $result .= $this->getSlice($rowEnd);
+        $result = $this->getSlice($this->tempDocumentMainPart, 0, $tblStart);
+        $result .= $this->getSlice($xmlTable, 0, $rowStart);
+
+        if ($mergeCells && is_array($mergeCells)) {
+            foreach ($mergeCells as $number) {
+                $extraCellStart = $this->findRowCellStart($xmlRow, $number);
+                $extraCellEnd = $this->findRowCellEnd($xmlRow, $extraCellStart);
+                $tmpXmlRow = $this->getSlice($xmlRow, 0, $extraCellStart);
+                $xmlCell = $this->getSlice($xmlRow, $extraCellStart, $extraCellEnd);
+
+                $xmlCell = preg_replace('#<w:vMerge/>#', '', $xmlCell);
+                if (!preg_match('#<w:vMerge w:val="(restart|continue)"/>#', $xmlRow)) {
+                    $tmpXmlRow .= preg_replace('#<w:tcPr>#', '<w:tcPr><w:vMerge w:val="restart"/>', $xmlCell);
+                } else {
+                    $tmpXmlRow .= $xmlCell;
+                }
+
+                $xmlRow = $tmpXmlRow.$this->getSlice($xmlRow, $extraCellEnd);
+            }
+        }
+
+        $results = $this->indexClonedVariables($numberOfClones, $xmlRow);
+        if ($mergeCells && is_array($mergeCells)) {
+            $first = true;
+            foreach ($results as &$v) {
+                if ($first) {
+                    $first = false;
+                    continue;
+                }
+                $v = preg_replace('#<w:vMerge w:val="restart"(\s*)/>#', '<w:vMerge w:val="continue"\\1/>', $v);
+                foreach ($mergeCells as $number) {
+                    $extraCellStart = $this->findRowCellStart($v, $number);
+                    $extraCellEnd = $this->findRowCellEnd($v, $extraCellStart);
+                    $tmpV = $this->getSlice($v, 0, $extraCellStart);
+                    $xmlCell = $this->getSlice($v, $extraCellStart, $extraCellEnd);
+                    $tmpV .= preg_replace('#<w:t>.*</w:t>#', '', $xmlCell);
+                    $tmpV .= $this->getSlice($v, $extraCellEnd);
+                    $v = $tmpV;
+                }
+            }
+        }
+        $result .= implode($results);
+        $result .= $this->getSlice($xmlTable, $rowEnd);
+        $result .= $this->getSlice($this->tempDocumentMainPart, $tblEnd);
 
         $this->tempDocumentMainPart = $result;
     }
@@ -910,20 +958,58 @@ class TemplateProcessor
     }
 
     /**
-     * Find the start position of the nearest table row before $offset.
+     * Find the start position of the nearest table before $offset.
      *
+     * @param string $xml
      * @param int $offset
      *
      * @throws \PhpOffice\PhpWord\Exception\Exception
      *
      * @return int
      */
-    protected function findRowStart($offset)
+    protected function findTableStart($xml, $offset = 1)
     {
-        $rowStart = strrpos($this->tempDocumentMainPart, '<w:tr ', ((strlen($this->tempDocumentMainPart) - $offset) * -1));
+        $start = strrpos($xml, '<w:tbl ', ((strlen($xml) - $offset) * -1));
+
+        if (!$start) {
+            $start = strrpos($xml, '<w:tbl>', ((strlen($xml) - $offset) * -1));
+        }
+        if (!$start) {
+            throw new Exception('Can not find the start position of the table to clone.');
+        }
+
+        return $start;
+    }
+
+    /**
+     * Find the end position of the nearest table after $offset.
+     *
+     * @param string $xml
+     * @param int $offset
+     *
+     * @return int
+     */
+    protected function findTableEnd($xml, $offset)
+    {
+        return strpos($xml, '</w:tbl>', $offset) + 7;
+    }
+
+    /**
+     * Find the start position of the nearest table row before $offset.
+     *
+     * @param string $xml
+     * @param int $offset
+     *
+     * @throws \PhpOffice\PhpWord\Exception\Exception
+     *
+     * @return int
+     */
+    protected function findRowStart($xml, $offset)
+    {
+        $rowStart = strrpos($xml, '<w:tr ', ((strlen($xml) - $offset) * -1));
 
         if (!$rowStart) {
-            $rowStart = strrpos($this->tempDocumentMainPart, '<w:tr>', ((strlen($this->tempDocumentMainPart) - $offset) * -1));
+            $rowStart = strrpos($xml, '<w:tr>', ((strlen($xml) - $offset) * -1));
         }
         if (!$rowStart) {
             throw new Exception('Can not find the start position of the row to clone.');
@@ -941,24 +1027,67 @@ class TemplateProcessor
      */
     protected function findRowEnd($offset)
     {
-        return strpos($this->tempDocumentMainPart, '</w:tr>', $offset) + 7;
+        return strpos($xml, '</w:tr>', $offset) + 7;
+    }
+
+    /**
+     * Find the start position $number-th table row cell.
+     *
+     * @param string $xml
+     * @param int $number
+     *
+     * @throws \PhpOffice\PhpWord\Exception\Exception
+     *
+     * @return int
+     */
+    protected function findRowCellStart($xml, $number)
+    {
+        $curNumber = 0;
+        $rowStart = 0;
+        while ($number !== $curNumber) {
+            $tmpRowStart = strpos($xml, '<w:tc ', $rowStart);
+            if (!$tmpRowStart) {
+                $tmpRowStart = strpos($xml, '<w:tc>', $rowStart);
+            }
+            if (!$tmpRowStart) {
+                throw new Exception('Can not find the start position of the '.$number.'-th cell in the row.');
+            }
+            ++$curNumber;
+            $rowStart = $tmpRowStart;
+        }
+
+        return $rowStart;
+    }
+
+    /**
+     * Find the end position of the nearest table row cell after $offset.
+     *
+     * @param string $xml
+     * @param int $offset
+     *
+     * @return int
+     */
+    protected function findRowCellEnd($xml, $offset)
+    {
+        return strpos($xml, '</w:tc>', $offset) + 7;
     }
 
     /**
      * Get a slice of a string.
      *
+     * @param string $xml
      * @param int $startPosition
      * @param int $endPosition
      *
      * @return string
      */
-    protected function getSlice($startPosition, $endPosition = 0)
+    protected function getSlice($xml, $startPosition, $endPosition = 0)
     {
         if (!$endPosition) {
-            $endPosition = strlen($this->tempDocumentMainPart);
+            $endPosition = strlen($xml);
         }
 
-        return substr($this->tempDocumentMainPart, $startPosition, ($endPosition - $startPosition));
+        return substr($xml, $startPosition, ($endPosition - $startPosition));
     }
 
     /**
