@@ -596,9 +596,20 @@ class TemplateProcessor
      *
      * @throws \PhpOffice\PhpWord\Exception\Exception
      */
-    public function cloneRow($search, $numberOfClones)
+    public function cloneRow($search, $numberOfClones, $config = false)
     {
         $search = static::ensureMacroCompleted($search);
+
+        $mergeV = false;
+        $mergeH = false;
+        if (is_array($config) && isset($config['merge']) && is_array($config['merge'])) {
+            if (isset($config['merge']['vertical']) && is_array($config['merge']['vertical'])) {
+                $mergeV = $config['merge']['vertical'];
+            }
+            if (isset($config['merge']['horizontal']) && is_array($config['merge']['horizontal'])) {
+                $mergeH = $config['merge']['horizontal'];
+            }
+        }
 
         $tagPos = strpos($this->tempDocumentMainPart, $search);
         if (!$tagPos) {
@@ -616,8 +627,7 @@ class TemplateProcessor
         $xmlRow = $this->getSlice($xmlTable, $rowStart, $rowEnd);
 
         // Check if there's a cell spanning multiple rows.
-        if ((!$mergeCells || !is_array($mergeCells)) ||
-            && preg_match('#<w:vMerge w:val="restart"/>#', $xmlRow)) {
+        if (!$mergeV && !$mergeH && preg_match('#<w:vMerge w:val="restart"/>#', $xmlRow)) {
             // $extraRowStart = $rowEnd;
             $extraRowEnd = $rowEnd;
             while (true) {
@@ -644,8 +654,8 @@ class TemplateProcessor
         $result = $this->getSlice($this->tempDocumentMainPart, 0, $tblStart);
         $result .= $this->getSlice($xmlTable, 0, $rowStart);
 
-        if ($mergeCells && is_array($mergeCells)) {
-            foreach ($mergeCells as $number) {
+        if ($mergeV) {
+            foreach ($mergeV as $number) {
                 $extraCellStart = $this->findRowCellStart($xmlRow, $number);
                 $extraCellEnd = $this->findRowCellEnd($xmlRow, $extraCellStart);
                 $tmpXmlRow = $this->getSlice($xmlRow, 0, $extraCellStart);
@@ -661,9 +671,12 @@ class TemplateProcessor
                 $xmlRow = $tmpXmlRow.$this->getSlice($xmlRow, $extraCellEnd);
             }
         }
+        if ($mergeH) {
+            // TODO horizontal merging
+        }
 
         $results = $this->indexClonedVariables($numberOfClones, $xmlRow);
-        if ($mergeCells && is_array($mergeCells)) {
+        if ($mergeV) {
             $first = true;
             foreach ($results as &$v) {
                 if ($first) {
@@ -671,7 +684,7 @@ class TemplateProcessor
                     continue;
                 }
                 $v = preg_replace('#<w:vMerge w:val="restart"(\s*)/>#', '<w:vMerge w:val="continue"\\1/>', $v);
-                foreach ($mergeCells as $number) {
+                foreach ($mergeV as $number) {
                     $extraCellStart = $this->findRowCellStart($v, $number);
                     $extraCellEnd = $this->findRowCellEnd($v, $extraCellStart);
                     $tmpV = $this->getSlice($v, 0, $extraCellStart);
@@ -681,6 +694,9 @@ class TemplateProcessor
                     $v = $tmpV;
                 }
             }
+        }
+        if ($mergeH) {
+            // TODO horizontal merging
         }
         $result .= implode($results);
         $result .= $this->getSlice($xmlTable, $rowEnd);
