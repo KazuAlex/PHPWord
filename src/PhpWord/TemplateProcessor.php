@@ -1041,7 +1041,7 @@ class TemplateProcessor
      *
      * @return int
      */
-    protected function findRowEnd($offset)
+    protected function findRowEnd($xml, $offset)
     {
         return strpos($xml, '</w:tr>', $offset) + 7;
     }
