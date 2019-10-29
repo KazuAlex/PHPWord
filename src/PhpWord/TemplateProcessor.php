@@ -705,6 +705,15 @@ class TemplateProcessor
         $this->tempDocumentMainPart = $result;
     }
 
+    private function strReplaceOnce($str_pattern, $str_replacement, $string) {
+        if (false !== strpos($string, $str_pattern)){
+            $occurrence = strpos($string, $str_pattern);
+            return substr_replace($string, $str_replacement, strpos($string, $str_pattern), strlen($str_pattern));
+        }
+
+        return $string;
+    }
+
     /**
      * Clone a block.
      *
@@ -720,7 +729,7 @@ class TemplateProcessor
     {
         $xmlBlock = null;
         preg_match(
-            '/(<w:p>(?:(?!<w:p>).)*\${'.$blockname.'}(?:(?!<\/w:p>).)*<\/w:p>)((?:(?!\${\/?'.$blockname.'}).)*)(<w:p>(?:(?!<w:p>).)*\${\/'.$blockname.'}(?:(?!<\/w:p>).)*<\/w:p>)/is',
+            '/(<w:p>(?:(?!<w:p>).)*\${'.$blockname.'}(?:(?!<\/w:p>).)*<\/w:p>)(.*)(<w:p>(?:(?!<w:p>).)*\${\/'.$blockname.'}(?:(?!<\/w:p>).)*<\/w:p>)/is',
             $this->tempDocumentMainPart,
             $matches
         );
@@ -739,11 +748,10 @@ class TemplateProcessor
             }
 
             if ($replace) {
-                $this->tempDocumentMainPart = preg_replace(
-                    '/'.preg_quote($matches[0], '/').'/',
+                $this->tempDocumentMainPart = $this->strReplaceOnce(
+                    $matches[0],
                     implode('', $cloned),
-                    $this->tempDocumentMainPart,
-                    1
+                    $this->tempDocumentMainPart
                 );
             }
         }
